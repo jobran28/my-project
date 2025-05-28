@@ -89,29 +89,20 @@ const UserOwnRepoPreview = ({ darkMode, setDarkMode }: UserOwnRepoPreviewProps) 
     const [selectedBinaryFile, setSelectedBinaryFile] = useState<{ url: string; type: string } | null>(null);
     const [showShareCodeAgent, setShowShareCodeAgent] = useState(false);
     const [editorRef, setEditorRef] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
-    const [repoOwnerUsername, setRepoOwnerUsername] = useState<string>(''); // <-- add this
+    const [repoOwnerUsername, setRepoOwnerUsername] = useState<string>('');
+    const [showAgentButtons, setShowAgentButtons] = useState(false);
+    const [agentOriginalContent, setAgentOriginalContent] = useState<string | null>(null);
 
     // Helper to store and retrieve previous file versions in IndexedDB
-const storePreviousVersion = async (fileKey: string, content: string) => {
-  try {
-    await idbSet(fileKey, content);
-  } catch (e) {
-    console.warn('Failed to store previous version in IndexedDB', e);
-  }
-};
-
-const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
-  try {
-    const result = await idbGet(fileKey);
-    return result === undefined ? null : result;
-  } catch (e) {
-    console.warn('Failed to get previous version from IndexedDB', e);
-    return null;
-  }
-};
-
-    // Add a ref to track the last agent edit
-    const lastAgentEditRef = React.useRef<{ filePath: string; newContent: string } | null>(null);
+    const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
+      try {
+        const result = await idbGet(fileKey);
+        return result === undefined ? null : result;
+      } catch (e) {
+        console.warn('Failed to get previous version from IndexedDB', e);
+        return null;
+      }
+    };
 
     // Inside the UserOwnRepoPreview component
     const [agentWidth, setAgentWidth] = useState(384); // Default width 384px (w-96)
@@ -153,41 +144,23 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
         const token = localStorage.getItem('authToken');
         const fullPath = `${currentPath}/${fileName}`.replace('temp-working-directory/', '');
 
-        // If this is an agent edit, store previous version in IndexedDB BEFORE updating
-        if (agentEdit && selectedFile?.content !== undefined) {
-          const fileKey = `agent_prev_${repo?.owner.username}_${fileName}`;
-          await storePreviousVersion(fileKey, selectedFile.content);
-          lastAgentEditRef.current = { filePath: fileName, newContent };
+        // When it's an agent edit, store original content in sessionStorage
+        if (agentEdit && selectedFile) {
+          // stash original for undo
+          const oKey = `agent_original_${repoOwnerUsername}_${fileName}`;
+          sessionStorage.setItem(oKey, selectedFile.content);
+          setAgentOriginalContent(selectedFile.content);
+          setShowAgentButtons(true);
         }
 
-        // Save changes to server
-        await fetch(`http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            relativePath: fullPath,
-            newContent: newContent
-          })
-        });
-
-        // Update sessionStorage
-        const sessionKey = `file_content_${repo?.owner.username}_${fileName}`;
-        const originalKey = `original_file_content_${repo?.owner.username}_${fileName}`;
-        sessionStorage.setItem(sessionKey, newContent);
-        sessionStorage.setItem(originalKey, newContent);
-
-        // Update selected file state
-        if (selectedFile?.path.endsWith(fileName)) {
-          setSelectedFile({...selectedFile, content: newContent});
-          setNewFileContent(newContent);
-        }
+        // update editor preview (temporary)
+        setSelectedFile(sf => sf && { ...sf, content: newContent });
+        setNewFileContent(newContent);
+        editorRef?.setValue(newContent);
 
         // If this was an agent edit, highlight changes
         if (agentEdit && editorRef) {
-          const fileKey = `agent_prev_${repo?.owner.username}_${fileName}`;
+          const fileKey = `agent_prev_${repoOwnerUsername}_${fileName}`;
           const prevContent = await getPreviousVersion(fileKey) || '';
           const diffs = diffLines(prevContent, newContent);
 
@@ -258,6 +231,47 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
       }
     };
 
+    const handleKeepChanges = async () => {
+      if (!selectedFile) return;
+      const name = selectedFile.path.split('/').pop()!;
+      // write new content to server so Git sees it
+      const fullPath = `${currentPath}/${name}`.replace('temp-working-directory/', '');
+      const token = localStorage.getItem('authToken');
+      await fetch(
+        `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ relativePath: fullPath, newContent: newFileContent })
+        }
+      );
+      // now update original and clear agent stash
+      const origKey = `original_file_content_${repoOwnerUsername}_${name}`;
+      sessionStorage.setItem(origKey, newFileContent);
+      sessionStorage.removeItem(`agent_original_${repoOwnerUsername}_${name}`);
+      setShowAgentButtons(false);
+      await handlePushChanges(commitMessage);
+    };
+
+    const handleUndoChanges = () => {
+      if (!selectedFile) return;
+      const filename = selectedFile.path.split('/').pop()!;
+      const origKey = `original_file_content_${repoOwnerUsername}_${filename}`;
+      const original = sessionStorage.getItem(origKey) || '';
+      // revert session and state to original
+      sessionStorage.setItem(`file_content_${repoOwnerUsername}_${filename}`, original);
+      setSelectedFile(sf => sf && ({ ...sf, content: original }));
+      setNewFileContent(original);
+      editorRef?.setValue(original);
+      // clear agent stash and UI
+      sessionStorage.removeItem(`agent_original_${repoOwnerUsername}_${filename}`);
+      editorRef?.deltaDecorations([], []);
+      setShowAgentButtons(false);
+    };
+
     // Add this helper function to check name existence on the server
     const checkNameExists = async (parentPath: string, name: string): Promise<boolean> => {
         try {
@@ -319,7 +333,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                 if (!userResponse.ok) throw new Error('Failed to fetch user details');
                 const userData = await userResponse.json();
 
-                setRepoOwnerUsername(userData.data.username); // <-- set the owner username
+                setRepoOwnerUsername(userData.data.username); // set the owner username
 
                 let originalOwner = "";
                 let originalRepoName = "";
@@ -351,9 +365,8 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                     originalRepoName: originalRepoName
                 });
 
-                // Use repoOwnerUsername for clone
-                // Log the clone API call
-                console.log('Cloning repo:', repoData.data.name, 'for owner:', userData.data.username);
+                // Clear previous sessionStorage for this owner before cloning
+                clearRepoSessionStorage(userData.data.username);
 
                 const cloneResponse = await fetch(
                     `http://localhost:5000/v1/api/preview/clone/${encodeURIComponent(repoData.data.name)}.git?ownername=${encodeURIComponent(userData.data.username)}`,
@@ -1234,8 +1247,6 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             //     return 'xquery';
             // case 'xqy':
             //     return 'xquery';
-            // case 'xqy':
-            //     return 'xquery';
             case 'xsl':
                 return 'xsl';
             case 'xslt':
@@ -1286,7 +1297,6 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             return;
         }
 
-        // Existing handling for text files
         try {
             const token = localStorage.getItem('authToken');
             if (!token) throw new Error('No authentication token found');
@@ -1301,26 +1311,42 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             const data = await response.json();
 
             if (data.data.type === 'file') {
-                const fileName = cleanPath.split('/').pop() || '';
-                const language = getLanguageFromExtension(fileName);
-
-                // Check sessionStorage first
-                const sessionKey = `file_content_${repo?.owner.username}_${fileName}`;
-                let fileContent = sessionStorage.getItem(sessionKey);
-
-                // If not in sessionStorage, store the fetched content
-                if (!fileContent) {
-                  fileContent = data.data.content;
-                  sessionStorage.setItem(sessionKey, fileContent ?? '');
+                // Always save the original fetched content in separate session storage
+                const fileName = cleanPath.split('/').pop()!;
+                const originalKey = `original_file_content_${repoOwnerUsername}_${fileName}`;
+                let originalContent = sessionStorage.getItem(originalKey);
+                if (!originalContent) {
+                  originalContent = data.data.content;
+                  sessionStorage.setItem(originalKey, originalContent);
                 }
-
-                setSelectedLanguage(language);
+                const sessionKey = `file_content_${repoOwnerUsername}_${fileName}`;
+                let fileContent = sessionStorage.getItem(sessionKey);
+                if (!fileContent) {
+                  // Use original content if no edit exists
+                  fileContent = originalContent;
+                  sessionStorage.setItem(sessionKey, fileContent);
+                }
+                setSelectedLanguage(getLanguageFromExtension(fileName));
                 setSelectedFile({ path: filePath, content: fileContent ?? '' });
                 setNewFileContent(fileContent ?? '');
+
+                // Check for agent original content
+                const agentOriginal = sessionStorage.getItem(`agent_original_${repoOwnerUsername}_${fileName}`);
+                setAgentOriginalContent(agentOriginal);
+                setShowAgentButtons(!!agentOriginal);
             }
         } catch (err) {
             setDirectoryError(err instanceof Error ? err.message : 'Failed to load file content');
         }
+    };
+
+    const clearRepoSessionStorage = (owner: string) => {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && (key.startsWith(`file_content_${owner}_`) || key.startsWith(`original_file_content_${owner}_`))) {
+          sessionStorage.removeItem(key);
+        }
+      }
     };
 
     const handleRenameItem = async () => {
@@ -1445,10 +1471,36 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
         }
     };
 
-    const handlePushChanges = async () => {
+    const handlePushChanges = async (message: string) => {
         try {
             const token = localStorage.getItem('authToken');
             if (!token) throw new Error('No authentication token found');
+
+            // Before pushing, write all updated file_content_ values to disk/server
+            if (repo && repoOwnerUsername) {
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
+                    if (key?.startsWith(`file_content_${repoOwnerUsername}_`)) {
+                        const fileName = key.replace(`file_content_${repoOwnerUsername}_`, '');
+                        const updatedContent = sessionStorage.getItem(key);
+                        if (updatedContent !== null) {
+                          const fullPath = `${currentPath}/${fileName}`.replace('temp-working-directory/', '');
+                            // Always update the file on the server with the latest content before push
+                            await fetch(
+                              `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
+                              {
+                                method: 'PUT',
+                                headers: {
+                                  'Authorization': `Bearer ${token}`,
+                                  'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ relativePath: fullPath, newContent: updatedContent })
+                              }
+                            );
+                        }
+                    }
+                }
+            }
 
             // Log the username used for push
             console.log('Pushing with ownername:', repoOwnerUsername);
@@ -1461,7 +1513,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ commitMessage })
+                    body: JSON.stringify({ commitMessage: message })
                 }
             );
 
@@ -1482,6 +1534,60 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             }
         }
     };
+
+    // Add this effect to detect file changes in sessionStorage and enable push button
+useEffect(() => {
+    if (!repo || !repoOwnerUsername) return;
+    // Check for any file_content_ changes for this repo owner
+    let foundChange = false;
+    for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (
+            key &&
+            key.startsWith(`file_content_${repoOwnerUsername}_`)
+        ) {
+            const originalKey = key.replace('file_content_', 'original_file_content_');
+            const current = sessionStorage.getItem(key);
+            const original = sessionStorage.getItem(originalKey);
+            if (current !== null && original !== null && current !== original) {
+                foundChange = true;
+                break;
+            }
+        }
+    }
+    setHasChanges(foundChange);
+    // Optionally, listen to storage events for multi-tab sync
+    const handler = () => {
+        let found = false;
+        for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+            if (
+                key &&
+                key.startsWith(`file_content_${repoOwnerUsername}_`)
+            ) {
+                const originalKey = key.replace('file_content_', 'original_file_content_');
+                const current = sessionStorage.getItem(key);
+                const original = sessionStorage.getItem(originalKey);
+                if (current !== null && original !== null && current !== original) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        setHasChanges(found);
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+}, [repo, repoOwnerUsername]);
+
+    // Add session storage cleanup on page unload
+    useEffect(() => {
+        const handleBeforeUnload = () => {
+            sessionStorage.clear();
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, []);
 
     const FileIcon = ({ type, name }: { type: 'file' | 'folder', name: string }) => {
         const extension = name.split('.').pop();
@@ -1880,12 +1986,12 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                             ? 'bg-violet-600 hover:bg-violet-700 text-white'
                                                             : 'bg-cyan-600 hover:bg-cyan-700 text-white'
                                                         }`}
-                                                >
+                                                                                               >
                                                     Rename
                                                 </button>
-                                            </div>
+                                                                                       </div>
                                         </motion.div>
-                                    </motion.div>
+                                                                       </motion.div>
                                 )}
                             </AnimatePresence>
 
@@ -1907,14 +2013,79 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                         <option value="javascript">JavaScript</option>
                                                         <option value="typescript">TypeScript</option>
                                                         <option value="python">Python</option>
-                                                        {/* Add more options as needed */}
+                                                        <option value="java">Java</option>
+                                                        <option value="csharp">C#</option>
+                                                        <option value="cpp">C++</option>
+                                                        <option value="c">C</option>
+                                                        <option value="html">HTML</option>
+                                                        <option value="css">CSS</option>
+                                                        <option value="json">JSON</option>
+                                                        <option value="markdown">Markdown</option>
+                                                        <option value="php">PHP</option>
+                                                        <option value="go">Go</option>
+                                                        <option value="ruby">Ruby</option>
+                                                        <option value="rust">Rust</option>
+                                                        <option value="swift">Swift</option>
+                                                        <option value="kotlin">Kotlin</option>
+                                                        <option value="scala">Scala</option>
+                                                        <option value="shell">Shell</option>
+                                                        <option value="perl">Perl</option>
+                                                        <option value="lua">Lua</option>
+                                                        <option value="r">R</option>
+                                                        <option value="dart">Dart</option>
+                                                        <option value="julia">Julia</option>
+                                                        <option value="haskell">Haskell</option>
+                                                        <option value="elm">Elm</option>
+                                                        <option value="clojure">Clojure</option>
+                                                        <option value="scheme">Scheme</option>
+                                                        <option value="erlang">Erlang</option>
+                                                        <option value="fsharp">F#</option>
+                                                        <option value="elixir">Elixir</option>
+                                                        <option value="groovy">Groovy</option>
+                                                        <option value="sql">SQL</option>
+                                                        <option value="yaml">YAML</option>
+                                                        <option value="xml">XML</option>
+                                                        <option value="toml">TOML</option>
+                                                        <option value="ini">INI</option>
+                                                        <option value="objective-c">Objective-C</option>
+                                                        <option value="vb">VB</option>
+                                                        <option value="powershell">PowerShell</option>
+                                                        <option value="coffeescript">CoffeeScript</option>
+                                                        <option value="lisp">Lisp</option>
+                                                        <option value="assembly">Assembly</option>
+                                                        <option value="pascal">Pascal</option>
+                                                        <option value="d">D</option>
+                                                        <option value="verilog">Verilog</option>
+                                                        <option value="systemverilog">SystemVerilog</option>
+                                                        <option value="vhdl">VHDL</option>
+                                                        <option value="tcl">Tcl</option>
+                                                        <option value="awk">Awk</option>
+                                                        <option value="sed">Sed</option>
+                                                        <option value="batch">Batch</option>
+                                                        <option value="postscript">PostScript</option>
+                                                        <option value="latex">LaTeX</option>
+                                                        <option value="bibtex">BibTeX</option>
+                                                        <option value="makefile">Makefile</option>
+                                                        <option value="cmake">CMake</option>
+                                                        <option value="dockerfile">Dockerfile</option>
+                                                        <option value="graphql">GraphQL</option>
+                                                        <option value="protobuf">Protobuf</option>
+                                                        <option value="thrift">Thrift</option>
+                                                        <option value="vue">Vue</option>
+                                                        <option value="svelte">Svelte</option>
+                                                        <option value="javascriptreact">JavaScript React (JSX)</option>
+                                                        <option value="typescriptreact">TypeScript React (TSX)</option>
+                                                        {/* Add more as needed */}
                                                     </select>
                                                 </div>
                                                 <div className="flex space-x-2">
-                                                    <button
-                                                        onClick={() => setSelectedFile(null)}
-                                                        className={`p-2 rounded-full ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                                                    >
+                                                    {showAgentButtons && (
+                                                        <>
+                                                            <button onClick={handleUndoChanges} className="px-3 py-1 bg-red-600 text-white rounded">Undo</button>
+                                                            <button onClick={handleKeepChanges} className="px-3 py-1 bg-green-600 text-white rounded">Keep</button>
+                                                        </>
+                                                    )}
+                                                    <button onClick={() => setSelectedFile(null)} className={`p-2 rounded-full ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}>
                                                         <X size={24} />
                                                     </button>
                                                 </div>
@@ -1930,7 +2101,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                     setNewFileContent(content);
                                                     setHasChanges(true);
                                                   }}
-                                                  onMount={(editor, monaco) => {
+                                                  onMount={(editor) => {
                                                     setEditorRef(editor);
                                                   }}
                                                   options={{
@@ -1995,7 +2166,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                     />
                                     <div className="relative group">
                                         <button
-                                            onClick={handlePushChanges}
+                                            onClick={() => handlePushChanges(commitMessage)}
                                             disabled={!hasChanges}
                                             className={`px-4 py-2 rounded-xl flex items-center space-x-2 ${
                                                 darkMode
