@@ -384,6 +384,7 @@ export class FolderPreviewService {
      * Modifies file content within the user's temp workdir.
      */
     public async modifyFile(username: string, relativePath: string, newContent: string): Promise<ApiResponse<string | null>> {
+        // Ensure the relativePath is handled safely (spaces, special chars)
         const pathValidationResult = await this.resolveAndValidatePath(username, relativePath);
         if (pathValidationResult.status === ResponseStatus.FAILED || !pathValidationResult.data) {
             return { status: ResponseStatus.FAILED, message: pathValidationResult.message, error: pathValidationResult.error };
@@ -391,32 +392,41 @@ export class FolderPreviewService {
         const { fullPath, normalizedPath } = pathValidationResult.data;
 
         try {
-            // Check if it exists and is a file
+            // Use fs.promises.stat with the absolute path (spaces are handled natively by Node.js)
             let stats;
-             try {
-                 stats = await fsp.stat(fullPath);
-             } catch (error: any) {
-                 if (error.code === 'ENOENT') {
-                     return { status: ResponseStatus.FAILED, message: 'File not found', error: 'File not found' };
-                 }
-                 throw error; // Re-throw other stat errors
-             }
-
-            if (!stats.isFile()) {
-                return { status: ResponseStatus.FAILED, message: 'The specified path is not a file', error: 'Not a file' };
+            try {
+                stats = await fsp.stat(fullPath);
+            } catch (error: any) {
+                if (error.code === 'ENOENT') {
+                    return { status: ResponseStatus.FAILED, message: 'File not found', error: 'File not found', data: fullPath };
+                }
+                return { status: ResponseStatus.FAILED, message: 'Failed to stat file', error: error.message || 'Unknown error', data: fullPath };
             }
 
-            // Update file content
+            if (!stats.isFile()) {
+                return { status: ResponseStatus.FAILED, message: 'The specified path is not a file', error: 'Not a file', data: fullPath };
+            }
+
+            // Log the modification (absolute path, spaces preserved)
+            const logMessage = [
+                "===========================================================================================================================================================================",
+                `Full path for modification: ${fullPath}`,
+                "=============================================================================================================================================="
+            ].join('\n');
+            const logFilePath = path.resolve(__dirname, 'modification.log');
+            await fsp.writeFile(logFilePath, logMessage + '\n', 'utf8');
+
+            // Write the new content (spaces in path are handled by Node.js)
             await fsp.writeFile(fullPath, newContent, 'utf8');
 
             return {
                 status: ResponseStatus.SUCCESS,
                 message: 'File updated successfully',
-                data: normalizedPath
+                data: fullPath // Return absolute path here
             };
+
         } catch (error: any) {
             console.error('Error updating file in service:', error);
-            // We already handle ENOENT above
             return { status: ResponseStatus.FAILED, message: 'Failed to update file', error: error.message || 'Unknown error' };
         }
     }

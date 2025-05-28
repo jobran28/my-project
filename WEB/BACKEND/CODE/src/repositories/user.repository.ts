@@ -49,12 +49,24 @@ export class UserRepository {
                 for (const tableName of tableNamesToInclude) {
                     if (tableName === 'all_repositories') {
                         hasAllRepositories = true;
-                        // Include both repository and repository_access relations
-                        includeRelations['repository'] = true;
+                        // Include both repository and repository_access relations with archived filter
+                        includeRelations['repository'] = {
+                            where: { archived: false }
+                        };
                         includeRelations['repository_access'] = {
+                            where: {
+                                repository: {
+                                    archived: false
+                                }
+                            },
                             include: {
                                 repository: true
                             }
+                        };
+                    } else if (tableName === 'repositories') {
+                        // Also filter archived repositories for direct repository relation
+                        includeRelations['repository'] = {
+                            where: { archived: false }
                         };
                     } else {
                         const relationName = this.userRelationMap[tableName];
@@ -251,6 +263,11 @@ export class UserRepository {
             }
 
             const allUsers = await this.prisma.users.findMany({
+                where: {
+                    is_admin: {
+                        not: true
+                    }
+                },
                 include: includeRelations,
             });
 

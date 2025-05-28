@@ -45,7 +45,10 @@ export class RepositoryRepository {
             console.log("User ID:", user?.userId);
             console.log("Username:", user?.username);
             
-            const whereClause: Prisma.repositoryWhereInput = {};
+            const whereClause: Prisma.repositoryWhereInput = {
+                archived: false,        // Exclude archived repositories
+                parent_id: null         // Exclude forked repositories
+            };
             
             // Apply search filter if provided
             if (searchText) {
