@@ -89,29 +89,23 @@ const UserOwnRepoPreview = ({ darkMode, setDarkMode }: UserOwnRepoPreviewProps) 
     const [selectedBinaryFile, setSelectedBinaryFile] = useState<{ url: string; type: string } | null>(null);
     const [showShareCodeAgent, setShowShareCodeAgent] = useState(false);
     const [editorRef, setEditorRef] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
-    const [repoOwnerUsername, setRepoOwnerUsername] = useState<string>(''); // <-- add this
+    const [repoOwnerUsername, setRepoOwnerUsername] = useState<string>('');
+    const [showAgentButtons, setShowAgentButtons] = useState(false);
+    const [agentOriginalContent, setAgentOriginalContent] = useState<string | null>(null);
+    const [currentDecorations, setCurrentDecorations] = useState<string[]>([]); // Track current decorations
+    const [recentlyEditedFiles, setRecentlyEditedFiles] = useState<Set<string>>(new Set());
+    const [recentlyEditedFolders, setRecentlyEditedFolders] = useState<Set<string>>(new Set());
 
     // Helper to store and retrieve previous file versions in IndexedDB
-const storePreviousVersion = async (fileKey: string, content: string) => {
-  try {
-    await idbSet(fileKey, content);
-  } catch (e) {
-    console.warn('Failed to store previous version in IndexedDB', e);
-  }
-};
-
-const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
-  try {
-    const result = await idbGet(fileKey);
-    return result === undefined ? null : result;
-  } catch (e) {
-    console.warn('Failed to get previous version from IndexedDB', e);
-    return null;
-  }
-};
-
-    // Add a ref to track the last agent edit
-    const lastAgentEditRef = React.useRef<{ filePath: string; newContent: string } | null>(null);
+    const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
+      try {
+        const result = await idbGet(fileKey);
+        return result === undefined ? null : result;
+      } catch (e) {
+        console.warn('Failed to get previous version from IndexedDB', e);
+        return null;
+      }
+    };
 
     // Inside the UserOwnRepoPreview component
     const [agentWidth, setAgentWidth] = useState(384); // Default width 384px (w-96)
@@ -151,45 +145,135 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
     const handleApplyChanges = async (fileName: string, newContent: string, agentEdit?: boolean) => {
       try {
         const token = localStorage.getItem('authToken');
-        const fullPath = `${currentPath}/${fileName}`.replace('temp-working-directory/', '');
-
-        // If this is an agent edit, store previous version in IndexedDB BEFORE updating
-        if (agentEdit && selectedFile?.content !== undefined) {
-          const fileKey = `agent_prev_${repo?.owner.username}_${fileName}`;
-          await storePreviousVersion(fileKey, selectedFile.content);
-          lastAgentEditRef.current = { filePath: fileName, newContent };
+        // Always construct the relativePath exactly as in handleFileClick (including subfolders)
+        let relativePath = '';
+        if (selectedFile) {
+          // Use the full path of the selected file, removing temp-working-directory/
+          relativePath = selectedFile.path.replace('temp-working-directory/', '');
+        } else {
+          // If editor is closed, construct the path from currentPath and fileName
+          // currentPath may already be relative (after removing temp-working-directory/)
+          const cleanCurrentPath = currentPath.replace('temp-working-directory/', '');
+          relativePath = `${cleanCurrentPath}/${fileName}`;
         }
 
-        // Save changes to server
-        await fetch(`http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            relativePath: fullPath,
-            newContent: newContent
-          })
-        });
-
-        // Update sessionStorage
-        const sessionKey = `file_content_${repo?.owner.username}_${fileName}`;
-        const originalKey = `original_file_content_${repo?.owner.username}_${fileName}`;
-        sessionStorage.setItem(sessionKey, newContent);
-        sessionStorage.setItem(originalKey, newContent);
-
-        // Update selected file state
-        if (selectedFile?.path.endsWith(fileName)) {
-          setSelectedFile({...selectedFile, content: newContent});
-          setNewFileContent(newContent);
+        // When it's an agent edit, store original content in sessionStorage
+        if (agentEdit) {
+          if (selectedFile) {
+            // Editor is open - store original for undo
+            const actualFileName = selectedFile.path.split('/').pop()!;
+            const oKey = `agent_original_${repoOwnerUsername}_${actualFileName}`;
+            sessionStorage.setItem(oKey, selectedFile.content);
+            setAgentOriginalContent(selectedFile.content);
+            setShowAgentButtons(true);
+          } else {
+            // Editor is closed - store original content for later undo and auto-open editor
+            const actualFileName = fileName;
+            const oKey = `agent_original_${repoOwnerUsername}_${actualFileName}`;
+            
+            // First, get the current content from server to store as original
+            try {
+              const currentResponse = await fetch(
+                `http://localhost:5000/v1/api/preview/content?relativePath=${encodeURIComponent(relativePath)}&ownername=${encodeURIComponent(repoOwnerUsername)}`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
+              );
+              if (currentResponse.ok) {
+                const currentData = await currentResponse.json();
+                if (currentData.data.type === 'file') {
+                  sessionStorage.setItem(oKey, currentData.data.content);
+                }
+              }
+            } catch (err) {
+              console.warn('Failed to get current content for undo:', err);
+            }
+          }
         }
 
-        // If this was an agent edit, highlight changes
-        if (agentEdit && editorRef) {
-          const fileKey = `agent_prev_${repo?.owner.username}_${fileName}`;
+        // If it's an agent edit and editor is not open, trigger visual notifications
+        if (agentEdit && !selectedFile) {
+          const editedFilePath = `${currentPath}/${fileName}`.replace('temp-working-directory/', '');
+          const editedFileName = fileName;
+          
+          // Add the file to recently edited files for visual effects
+          setRecentlyEditedFiles(prev => new Set([...prev, editedFileName]));
+          
+          // Add parent folders to recently edited folders
+          const pathParts = editedFilePath.split('/');
+          for (let i = 1; i < pathParts.length; i++) {
+            const folderPath = pathParts.slice(0, i).join('/');
+            setRecentlyEditedFolders(prev => new Set([...prev, folderPath]));
+          }
+          
+          // Remove the visual effects after animation completes
+          setTimeout(() => {
+            setRecentlyEditedFiles(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(editedFileName);
+              return newSet;
+            });
+            setRecentlyEditedFolders(prev => {
+              const newSet = new Set(prev);
+              const pathParts = editedFilePath.split('/');
+              for (let i = 1; i < pathParts.length; i++) {
+                const folderPath = pathParts.slice(0, i).join('/');
+                newSet.delete(folderPath);
+              }
+              return newSet;
+            });
+          }, 4000); // Remove after 4 seconds
+        }
+
+        // Strip leading newlines for agent edits to prevent blank first lines
+        const cleanedContent = agentEdit ? newContent.replace(/^\n+/, '') : newContent;
+
+        // If editor is closed, update the file on server directly
+        if (!selectedFile) {
+          await fetch(
+            `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
+            {
+              method: 'PUT',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ relativePath, newContent: cleanedContent })
+            }
+          );
+          
+          // Update session storage with the new content
+          sessionStorage.setItem(`file_content_${repoOwnerUsername}_${fileName}`, cleanedContent);
+          
+          // If it's an agent edit, automatically open the editor after a brief delay for visual effects
+          if (agentEdit) {
+            setTimeout(() => {
+              // Construct the full file path
+              const fullFilePath = `${currentPath}/${fileName}`;
+              
+              // Set up the file data for the editor
+              setSelectedLanguage(getLanguageFromExtension(fileName));
+              setSelectedFile({ path: fullFilePath, content: cleanedContent });
+              setNewFileContent(cleanedContent);
+              
+              // Set agent original content and show buttons
+              const agentOriginalKey = `agent_original_${repoOwnerUsername}_${fileName}`;
+              const agentOriginal = sessionStorage.getItem(agentOriginalKey);
+              setAgentOriginalContent(agentOriginal);
+              setShowAgentButtons(true);
+              
+            }, 2000); // Wait 2 seconds for visual effects to be noticeable
+          }
+        } else {
+          // Editor is open - update editor preview (temporary)
+          setSelectedFile(sf => sf && { ...sf, content: cleanedContent });
+          setNewFileContent(cleanedContent);
+          editorRef?.setValue(cleanedContent);
+        }
+
+        // If this was an agent edit and editor is open, highlight changes
+        if (agentEdit && editorRef && selectedFile) {
+          const fileKey = `agent_prev_${repoOwnerUsername}_${fileName}`;
           const prevContent = await getPreviousVersion(fileKey) || '';
-          const diffs = diffLines(prevContent, newContent);
+          const diffs = diffLines(prevContent, cleanedContent);
 
           let decorations: monaco.editor.IModelDeltaDecoration[] = [];
           let oldLine = 1;
@@ -249,13 +333,64 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             }
           }
 
-          editorRef.deltaDecorations([], decorations);
+          // Clear existing decorations and apply new ones
+          const newDecorationIds = editorRef.deltaDecorations(currentDecorations, decorations);
+          setCurrentDecorations(newDecorationIds);
         }
 
         fetchDirectoryContents();
       } catch (err) {
         setDirectoryError('Failed to apply changes: ' + (err instanceof Error ? err.message : 'Unknown error'));
       }
+    };
+
+    const handleKeepChanges = async () => {
+      if (!selectedFile) return;
+      // now use the full path of the selected file
+      const relativePath = selectedFile.path.replace('temp-working-directory/', '');
+      const fileName = selectedFile.path.split('/').pop()!;
+      const token = localStorage.getItem('authToken');
+      await fetch(
+        `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ relativePath, newContent: newFileContent })
+        }
+      );
+      // now update original and clear all change tracking
+      const origKey = `original_file_content_${repoOwnerUsername}_${fileName}`;
+      sessionStorage.setItem(origKey, newFileContent);
+      sessionStorage.removeItem(`agent_original_${repoOwnerUsername}_${fileName}`);
+      sessionStorage.removeItem(`manual_changes_${repoOwnerUsername}_${fileName}`);
+      setShowAgentButtons(false);
+      setAgentOriginalContent(null);
+      await handlePushChanges(commitMessage);
+    };
+
+    const handleUndoChanges = () => {
+      if (!selectedFile) return;
+      const filename = selectedFile.path.split('/').pop()!;
+      const origKey = `original_file_content_${repoOwnerUsername}_${filename}`;
+      const original = sessionStorage.getItem(origKey) || '';
+      // revert session and state to original
+      sessionStorage.setItem(`file_content_${repoOwnerUsername}_${filename}`, original);
+      setSelectedFile(sf => sf && ({ ...sf, content: original }));
+      setNewFileContent(original);
+      editorRef?.setValue(original);
+      // clear all change tracking
+      sessionStorage.removeItem(`agent_original_${repoOwnerUsername}_${filename}`);
+      sessionStorage.removeItem(`manual_changes_${repoOwnerUsername}_${filename}`);
+      // Clear all decorations completely
+      if (editorRef) {
+          const clearedDecorations = editorRef.deltaDecorations(currentDecorations, []);
+          setCurrentDecorations([]);
+      }
+      setShowAgentButtons(false);
+      setAgentOriginalContent(null);
     };
 
     // Add this helper function to check name existence on the server
@@ -319,7 +454,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                 if (!userResponse.ok) throw new Error('Failed to fetch user details');
                 const userData = await userResponse.json();
 
-                setRepoOwnerUsername(userData.data.username); // <-- set the owner username
+                setRepoOwnerUsername(userData.data.username); // set the owner username
 
                 let originalOwner = "";
                 let originalRepoName = "";
@@ -351,9 +486,8 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                     originalRepoName: originalRepoName
                 });
 
-                // Use repoOwnerUsername for clone
-                // Log the clone API call
-                console.log('Cloning repo:', repoData.data.name, 'for owner:', userData.data.username);
+                // Clear previous sessionStorage for this owner before cloning
+                clearRepoSessionStorage(userData.data.username);
 
                 const cloneResponse = await fetch(
                     `http://localhost:5000/v1/api/preview/clone/${encodeURIComponent(repoData.data.name)}.git?ownername=${encodeURIComponent(userData.data.username)}`,
@@ -683,80 +817,170 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
         }
     };
 
-    // Update the TreeView component to properly handle clicks
+    // Update the TreeView component to include visual effects for edited files
     const TreeView = ({ nodes, onToggle, onFileClick }: { nodes: TreeNode[], onToggle: (path: string) => void, onFileClick: (path: string) => void }) => (
         <div className="pl-2">
-            {nodes.map(node => (
-                <div key={node.path}>
-                    <div className="flex items-center">
-                        {node.type === 'folder' && (
-                            <button
-                                onClick={() => onToggle(node.path)}
-                                className="mr-1 p-1 hover:bg-gray-700 rounded text-sm"
+            {nodes.map(node => {
+                const isRecentlyEditedFile = recentlyEditedFiles.has(node.name);
+                const isRecentlyEditedFolder = recentlyEditedFolders.has(node.path);
+                
+                return (
+                    <div key={node.path}>
+                        <div className="flex items-center">
+                            {node.type === 'folder' && (
+                                <button
+                                    onClick={() => onToggle(node.path)}
+                                    className="mr-1 p-1 hover:bg-gray-700 rounded text-sm"
+                                >
+                                    {node.isExpanded ? '▼' : '▶'}
+                                </button>
+                            )}
+                            <motion.div
+                                className={`group flex items-center flex-1 p-2 rounded-lg ${darkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-200'} ${
+                                    isRecentlyEditedFile || isRecentlyEditedFolder 
+                                        ? `relative ${darkMode ? 'bg-gradient-to-r from-violet-900/40 to-purple-900/40' : 'bg-gradient-to-r from-cyan-100/60 to-blue-100/60'}`
+                                        : ''
+                                }`}
+                                animate={isRecentlyEditedFile || isRecentlyEditedFolder ? {
+                                    scale: [1, 1.05, 1],
+                                    x: [0, 3, -3, 0],
+                                } : {}}
+                                transition={{
+                                    duration: 2,
+                                    repeat: 1,
+                                    ease: "easeInOut"
+                                }}
                             >
-                                {node.isExpanded ? '▼' : '▶'}
-                            </button>
-                        )}
-                        <div className={`group flex items-center flex-1 p-2 rounded-lg ${darkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}>
-                            {node.isEditing ? (
-                                <input
-                                    autoFocus
-                                    value={node.name}
-                                    onChange={(e) => handleNameChange(node, e.target.value)}
-                                    onKeyDown={(e) => handleKeyDown(e, node)}
-                                    className="ml-2 bg-transparent border-b border-blue-500 outline-none"
-                                />
-                            ) : (
-                                <>
-                                    <FileIcon type={node.type} name={node.name} />
-                                    <span
-                                        className="ml-2 cursor-pointer"
-                                        onDoubleClick={node.type === 'folder' ? () => handleRenameStart(node) : undefined}
-                                        onClick={() => {
-                                            if (node.type === 'file') {
-                                                onFileClick(node.path);
-                                            }
-                                        }}
-                                        draggable={node.type === 'file'}
-                                        onDragStart={(e) => handleFileDragStart(e, node)}
-                                    >
-                                        {node.name}
-                                    </span>
-                                </>
-                            )}
-                            {!node.isEditing && node.type === 'folder' && (
-                                <div className="flex space-x-1 ml-2 opacity-0 group-hover:opacity-100">
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleAddItem(node, 'folder');
-                                        }}
-                                        className={`p-1 rounded ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
-                                    >
-                                        <Folder size={16} className={darkMode ? 'text-amber-400' : 'text-amber-600'} />
-                                    </button>
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleAddItem(node, 'file');
-                                        }}
-                                        className={`p-1 rounded ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
-                                    >
-                                        <File size={16} className={darkMode ? 'text-blue-400' : 'text-blue-600'} />
-                                    </button>
-                                </div>
-                            )}
+                                {(isRecentlyEditedFile || isRecentlyEditedFolder) && (
+                                    <>
+                                        {/* Glow effect */}
+                                        <motion.div
+                                            className={`absolute inset-0 rounded-lg ${
+                                                darkMode 
+                                                    ? 'bg-gradient-to-r from-violet-500/30 to-purple-500/30' 
+                                                    : 'bg-gradient-to-r from-cyan-400/30 to-blue-400/30'
+                                            }`}
+                                            animate={{
+                                                opacity: [0, 0.8, 0],
+                                                scale: [0.95, 1.05, 0.95],
+                                            }}
+                                            transition={{
+                                                duration: 1.5,
+                                                repeat: 2,
+                                                ease: "easeInOut"
+                                            }}
+                                        />
+                                        {/* Sparkle effect */}
+                                        <motion.div
+                                            className={`absolute top-1 right-1 w-2 h-2 rounded-full ${
+                                                darkMode ? 'bg-violet-400' : 'bg-cyan-500'
+                                            }`}
+                                            animate={{
+                                                opacity: [0, 1, 0],
+                                                scale: [0, 1, 0],
+                                                rotate: [0, 180, 360],
+                                            }}
+                                            transition={{
+                                                duration: 0.8,
+                                                repeat: 3,
+                                                ease: "easeInOut"
+                                            }}
+                                        />
+                                    </>
+                                )}
+                                
+                                {node.isEditing ? (
+                                    <input
+                                        autoFocus
+                                        value={node.name}
+                                        onChange={(e) => handleNameChange(node, e.target.value)}
+                                        onKeyDown={(e) => handleKeyDown(e, node)}
+                                        className="ml-2 bg-transparent border-b border-blue-500 outline-none"
+                                    />
+                                ) : (
+                                    <>
+                                        <motion.div
+                                            animate={isRecentlyEditedFile || isRecentlyEditedFolder ? {
+                                                rotate: [0, 5, -5, 0],
+                                                scale: [1, 1.1, 1],
+                                            } : {}}
+                                            transition={{
+                                                duration: 0.6,
+                                                repeat: 2,
+                                                ease: "easeInOut"
+                                            }}
+                                        >
+                                            <FileIcon type={node.type} name={node.name} />
+                                        </motion.div>
+                                        <motion.span
+                                            className={`ml-2 cursor-pointer ${
+                                                isRecentlyEditedFile || isRecentlyEditedFolder
+                                                    ? `font-semibold ${darkMode ? 'text-violet-300' : 'text-cyan-700'}`
+                                                    : ''
+                                            }`}
+                                            onDoubleClick={node.type === 'folder' ? () => handleRenameStart(node) : undefined}
+                                            onClick={() => {
+                                                if (node.type === 'file') {
+                                                    onFileClick(node.path);
+                                                }
+                                            }}
+                                            draggable={node.type === 'file'}
+                                            // Move onDragStart to the underlying span, not the motion.span
+                                            // (framer-motion's animate/transition props remain)
+                                            animate={isRecentlyEditedFile ? {
+                                                color: darkMode 
+                                                    ? ['#c4b5fd', '#a78bfa', '#7c3aed', '#c4b5fd']
+                                                    : ['#0891b2', '#06b6d4', '#0284c7', '#0891b2']
+                                            } : {}}
+                                            transition={{
+                                                duration: 1.2,
+                                                repeat: 2,
+                                                ease: "easeInOut"
+                                            }}
+                                        >
+                                            <span
+                                                draggable={node.type === 'file'}
+                                                onDragStart={(e: React.DragEvent) => handleFileDragStart(e, node)}
+                                            >
+                                                {node.name}
+                                            </span>
+                                        </motion.span>
+                                    </>
+                                )}
+                                {!node.isEditing && node.type === 'folder' && (
+                                    <div className="flex space-x-1 ml-2 opacity-0 group-hover:opacity-100">
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleAddItem(node, 'folder');
+                                            }}
+                                            className={`p-1 rounded ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                                        >
+                                            <Folder size={16} className={darkMode ? 'text-amber-400' : 'text-amber-600'} />
+                                        </button>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleAddItem(node, 'file');
+                                            }}
+                                            className={`p-1 rounded ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                                        >
+                                            <File size={16} className={darkMode ? 'text-blue-400' : 'text-blue-600'} />
+                                        </button>
+                                    </div>
+                                )}
+                            </motion.div>
                         </div>
+                        {node.isExpanded && (
+                            <TreeView
+                                nodes={node.children}
+                                onToggle={onToggle}
+                                onFileClick={onFileClick}
+                            />
+                        )}
                     </div>
-                    {node.isExpanded && (
-                        <TreeView
-                            nodes={node.children}
-                            onToggle={onToggle}
-                            onFileClick={onFileClick}
-                        />
-                    )}
-                </div>
-            ))}
+                );
+            })}
         </div>
     );
 
@@ -1234,8 +1458,6 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             //     return 'xquery';
             // case 'xqy':
             //     return 'xquery';
-            // case 'xqy':
-            //     return 'xquery';
             case 'xsl':
                 return 'xsl';
             case 'xslt':
@@ -1259,9 +1481,15 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
 
     const handleFileClick = async (filePath: string) => {
         const fileName = filePath.split('/').pop() || '';
+        
+        // Clear any existing decorations before switching files
+        if (editorRef && currentDecorations.length > 0) {
+            editorRef.deltaDecorations(currentDecorations, []);
+            setCurrentDecorations([]);
+        }
+        
         if (isBinaryFile(fileName)) {
             // Handle binary file using the /files route
-
             const cleanPath = filePath.replace('temp-working-directory/', '');
             const token = localStorage.getItem('authToken');
             if (!token) {
@@ -1286,7 +1514,6 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             return;
         }
 
-        // Existing handling for text files
         try {
             const token = localStorage.getItem('authToken');
             if (!token) throw new Error('No authentication token found');
@@ -1301,26 +1528,52 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             const data = await response.json();
 
             if (data.data.type === 'file') {
-                const fileName = cleanPath.split('/').pop() || '';
-                const language = getLanguageFromExtension(fileName);
-
-                // Check sessionStorage first
-                const sessionKey = `file_content_${repo?.owner.username}_${fileName}`;
+                const fileName = cleanPath.split('/').pop()!;
+                const originalKey = `original_file_content_${repoOwnerUsername}_${fileName}`;
+                const sessionKey = `file_content_${repoOwnerUsername}_${fileName}`;
+                const agentOriginalKey = `agent_original_${repoOwnerUsername}_${fileName}`;
+                
+                // Always save the original fetched content if not exists
+                let originalContent = sessionStorage.getItem(originalKey);
+                if (!originalContent) {
+                  originalContent = data.data.content;
+                  sessionStorage.setItem(originalKey, originalContent ?? '');
+                }
+                
+                // Check if there's agent-modified content in session storage
                 let fileContent = sessionStorage.getItem(sessionKey);
-
-                // If not in sessionStorage, store the fetched content
                 if (!fileContent) {
+                  // Use server content if no session content exists
                   fileContent = data.data.content;
                   sessionStorage.setItem(sessionKey, fileContent ?? '');
                 }
-
-                setSelectedLanguage(language);
+                
+                setSelectedLanguage(getLanguageFromExtension(fileName));
                 setSelectedFile({ path: filePath, content: fileContent ?? '' });
                 setNewFileContent(fileContent ?? '');
+
+                // Check for agent edits that happened while editor was closed
+                const agentOriginal = sessionStorage.getItem(agentOriginalKey);
+                const manualChanges = sessionStorage.getItem(`manual_changes_${repoOwnerUsername}_${fileName}`);
+                
+                // Show buttons if there are agent changes OR manual changes
+                const hasAnyChanges = !!agentOriginal || !!manualChanges;
+                
+                setAgentOriginalContent(agentOriginal);
+                setShowAgentButtons(hasAnyChanges);
             }
         } catch (err) {
             setDirectoryError(err instanceof Error ? err.message : 'Failed to load file content');
         }
+    };
+
+    const clearRepoSessionStorage = (owner: string) => {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && (key.startsWith(`file_content_${owner}_`) || key.startsWith(`original_file_content_${owner}_`))) {
+          sessionStorage.removeItem(key);
+        }
+      }
     };
 
     const handleRenameItem = async () => {
@@ -1445,10 +1698,54 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
         }
     };
 
-    const handlePushChanges = async () => {
+    const handlePushChanges = async (message: string) => {
         try {
             const token = localStorage.getItem('authToken');
             if (!token) throw new Error('No authentication token found');
+
+            // Before pushing, write all updated file_content_ values to disk/server
+            if (repo && repoOwnerUsername) {
+              for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                if (key?.startsWith(`file_content_${repoOwnerUsername}_`)) {
+                  const fileName = key.replace(`file_content_${repoOwnerUsername}_`, '');
+                  const updatedContent = sessionStorage.getItem(key);
+                  if (updatedContent !== null) {
+                    // Construct the full relative path as in handleFileClick
+                    // Find the file in the directory tree to get its full path
+                    let relativePath = '';
+                    // Try to find the file in the sidebarTree
+                    const findFilePath = (nodes: TreeNode[], name: string): string | null => {
+                      for (const node of nodes) {
+                        if (node.type === 'file' && node.name === name) return node.path;
+                        const found = findFilePath(node.children, name);
+                        if (found) return found;
+                      }
+                      return null;
+                    };
+                    const foundPath = findFilePath(sidebarTree, fileName);
+                    if (foundPath) {
+                      relativePath = foundPath.replace('temp-working-directory/', '');
+                    } else {
+                      // Fallback: use currentPath + fileName
+                      const cleanCurrentPath = currentPath.replace('temp-working-directory/', '');
+                      relativePath = `${cleanCurrentPath}/${fileName}`;
+                    }
+                    await fetch(
+                      `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
+                      {
+                        method: 'PUT',
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ relativePath, newContent: updatedContent })
+                      }
+                    );
+                  }
+                }
+              }
+            }
 
             // Log the username used for push
             console.log('Pushing with ownername:', repoOwnerUsername);
@@ -1461,7 +1758,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                         'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ commitMessage })
+                    body: JSON.stringify({ commitMessage: message })
                 }
             );
 
@@ -1482,6 +1779,60 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             }
         }
     };
+
+    // Add this effect to detect file changes in sessionStorage and enable push button
+useEffect(() => {
+    if (!repo || !repoOwnerUsername) return;
+    // Check for any file_content_ changes for this repo owner
+    let foundChange = false;
+    for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (
+            key &&
+            key.startsWith(`file_content_${repoOwnerUsername}_`)
+        ) {
+            const originalKey = key.replace('file_content_', 'original_file_content_');
+            const current = sessionStorage.getItem(key);
+            const original = sessionStorage.getItem(originalKey);
+            if (current !== null && original !== null && current !== original) {
+                foundChange = true;
+                break;
+            }
+        }
+    }
+    setHasChanges(foundChange);
+    // Optionally, listen to storage events for multi-tab sync
+    const handler = () => {
+        let found = false;
+        for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+            if (
+                key &&
+                key.startsWith(`file_content_${repoOwnerUsername}_`)
+            ) {
+                const originalKey = key.replace('file_content_', 'original_file_content_');
+                const current = sessionStorage.getItem(key);
+                const original = sessionStorage.getItem(originalKey);
+                if (current !== null && original !== null && current !== original) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        setHasChanges(found);
+    };
+    window.addEventListener('storage', handler);
+    return () => window.removeEventListener('storage', handler);
+}, [repo, repoOwnerUsername]);
+
+    // Add session storage cleanup on page unload
+    useEffect(() => {
+        const handleBeforeUnload = () => {
+            sessionStorage.clear();
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, []);
 
     const FileIcon = ({ type, name }: { type: 'file' | 'folder', name: string }) => {
         const extension = name.split('.').pop();
@@ -1508,47 +1859,151 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
         );
     };
 
-    const DirectoryItemCard = ({ item }: { item: DirectoryItem }) => (
-        <motion.div
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 10 }}
-            className={`group relative flex items-center p-3 rounded-xl ${darkMode ? 'hover:bg-gray-800/50' : 'hover:bg-gray-200'
-                } transition-all duration-200 shadow-sm ${darkMode ? 'bg-gray-800/30' : 'bg-white'
+    const DirectoryItemCard = ({ item }: { item: DirectoryItem }) => {
+        const isRecentlyEdited = recentlyEditedFiles.has(item.name);
+        
+        return (
+            <motion.div
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ 
+                    opacity: 1, 
+                    x: 0,
+                    ...(isRecentlyEdited ? {
+                        scale: [1, 1.08, 1],
+                        rotateY: [0, 5, -5, 0],
+                    } : {})
+                }}
+                exit={{ opacity: 0, x: 10 }}
+                transition={{
+                    ...(isRecentlyEdited ? {
+                        duration: 1.8,
+                        repeat: 1,
+                        ease: "easeInOut"
+                    } : {})
+                }}
+                className={`group relative flex items-center p-3 rounded-xl ${
+                    darkMode ? 'hover:bg-gray-800/50' : 'hover:bg-gray-200'
+                } transition-all duration-200 shadow-sm ${
+                    darkMode ? 'bg-gray-800/30' : 'bg-white'
+                } ${
+                    isRecentlyEdited 
+                        ? `${darkMode ? 'bg-gradient-to-br from-violet-900/50 to-purple-900/50 shadow-violet-500/25' : 'bg-gradient-to-br from-cyan-100/80 to-blue-100/80 shadow-cyan-500/25'} shadow-xl`
+                        : ''
                 }`}
-        >
-            <div className="flex items-center flex-1" onClick={() => item.type === 'folder'
-                ? handleFolderClick(item.name)
-                : handleFileClick(`${currentPath}/${item.name}`)}> {/* Changed here */}
-                <FileIcon type={item.type} name={item.name} />
-                <span className="font-mono text-sm">{item.name}</span>
-                {item.size && (
-                    <span className="ml-2 text-xs opacity-60">
-                        {(item.size / 1024).toFixed(2)} KB
-                    </span>
+            >
+                {isRecentlyEdited && (
+                    <>
+                        {/* Outer glow effect */}
+                        <motion.div
+                            className={`absolute -inset-1 rounded-xl ${
+                                darkMode 
+                                    ? 'bg-gradient-to-r from-violet-600/40 to-purple-600/40' 
+                                    : 'bg-gradient-to-r from-cyan-500/40 to-blue-500/40'
+                            } blur-sm`}
+                            animate={{
+                                opacity: [0, 1, 0],
+                                scale: [0.9, 1.1, 0.9],
+                            }}
+                            transition={{
+                                duration: 2,
+                                repeat: 1,
+                                ease: "easeInOut"
+                            }}
+                        />
+                        {/* Floating particles */}
+                        {[...Array(3)].map((_, i) => (
+                            <motion.div
+                                key={i}
+                                className={`absolute w-1 h-1 rounded-full ${
+                                    darkMode ? 'bg-violet-400' : 'bg-cyan-500'
+                                }`}
+                                style={{
+                                    top: `${20 + i * 20}%`,
+                                    right: `${10 + i * 15}%`,
+                                }}
+                                animate={{
+                                    y: [-10, -20, -10],
+                                    opacity: [0, 1, 0],
+                                    scale: [0, 1, 0],
+                                }}
+                                transition={{
+                                    duration: 1.5,
+                                    repeat: 1,
+                                    delay: i * 0.3,
+                                    ease: "easeInOut"
+                                }}
+                            />
+                        ))}
+                    </>
                 )}
-            </div>
-            <div className="flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                    onClick={() => setRenameItem({
-                        oldPath: `${currentPath}/${item.name}`,
-                        newPath: `${currentPath}/${item.name}`
-                    })}
-                    className={`p-1.5 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-300'
-                        }`}
+                
+                <div 
+                    className="flex items-center flex-1 relative z-10" 
+                    onClick={() => item.type === 'folder'
+                        ? handleFolderClick(item.name)
+                        : handleFileClick(`${currentPath}/${item.name}`)
+                    }
                 >
-                    <Edit size={16} className={darkMode ? 'text-gray-300' : 'text-gray-600'} />
-                </button>
-                <button
-                    onClick={() => handleDeleteItem(item.name)}
-                    className={`p-1.5 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-300'
+                    <motion.div
+                        animate={isRecentlyEdited ? {
+                            rotate: [0, 10, -10, 0],
+                            scale: [1, 1.1, 1],
+                        } : {}}
+                        transition={{
+                            duration: 1,
+                            repeat: 2,
+                            ease: "easeInOut"
+                        }}
+                    >
+                        <FileIcon type={item.type} name={item.name} />
+                    </motion.div>
+                    <motion.span 
+                        className={`font-mono text-sm ${
+                            isRecentlyEdited 
+                                ? `font-bold ${darkMode ? 'text-violet-200' : 'text-cyan-800'}`
+                                : ''
                         }`}
-                >
-                    <Trash size={16} className={darkMode ? 'text-red-400' : 'text-red-600'} />
-                </button>
-            </div>
-        </motion.div>
-    );
+                        animate={isRecentlyEdited ? {
+                            color: darkMode 
+                                ? ['#ddd6fe', '#c4b5fd', '#8b5cf6', '#ddd6fe']
+                                : ['#164e63', '#0891b2', '#0e7490', '#164e63']
+                        } : {}}
+                        transition={{
+                            duration: 1.5,
+                            repeat: 1,
+                            ease: "easeInOut"
+                        }}
+                    >
+                        {item.name}
+                    </motion.span>
+                    {item.size && (
+                        <span className="ml-2 text-xs opacity-60">
+                            {(item.size / 1024).toFixed(2)} KB
+                        </span>
+                    )}
+                </div>
+                <div className="flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity relative z-10">
+                    <button
+                        onClick={() => setRenameItem({
+                            oldPath: `${currentPath}/${item.name}`,
+                            newPath: `${currentPath}/${item.name}`
+                        })}
+                        className={`p-1.5 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-300'
+                            }`}
+                    >
+                        <Edit size={16} className={darkMode ? 'text-gray-300' : 'text-gray-600'} />
+                    </button>
+                    <button
+                        onClick={() => handleDeleteItem(item.name)}
+                        className={`p-1.5 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-300'
+                            }`}
+                    >
+                        <Trash size={16} className={darkMode ? 'text-red-400' : 'text-red-600'} />
+                    </button>
+                </div>
+            </motion.div>
+        );
+    };
 
     if (loading) {
         return (
@@ -1583,6 +2038,17 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
             .agent-added-line { background-color: #16a34a33 !important; }   /* green */
             .agent-removed-line { background-color: #dc262633 !important; } /* red */
             .agent-updated-line { background-color: #2563eb33 !important; } /* blue */
+            
+            @keyframes shimmer {
+                0% { background-position: -1000px 0; }
+                100% { background-position: 1000px 0; }
+            }
+            
+            .shimmer-effect {
+                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+                background-size: 1000px 100%;
+                animation: shimmer 2s infinite;
+            }
             `}
             </style>
             <div className={`min-h-screen flex flex-col ${darkMode ? 'bg-gradient-to-br from-gray-900 to-gray-800 text-white'
@@ -1846,8 +2312,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                 <h3 className="text-lg font-semibold">Rename Item</h3>
                                                 <button
                                                     onClick={() => setRenameItem(null)}
-                                                    className={`p-1 rounded-full ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
-                                                        }`}
+                                                    className={`p-1 rounded-full ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
                                                 >
                                                     <X size={20} />
                                                 </button>
@@ -1880,12 +2345,12 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                             ? 'bg-violet-600 hover:bg-violet-700 text-white'
                                                             : 'bg-cyan-600 hover:bg-cyan-700 text-white'
                                                         }`}
-                                                >
+                                                                                               >
                                                     Rename
                                                 </button>
-                                            </div>
+                                                                                       </div>
                                         </motion.div>
-                                    </motion.div>
+                                                                       </motion.div>
                                 )}
                             </AnimatePresence>
 
@@ -2045,10 +2510,20 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                     </select>
                                                 </div>
                                                 <div className="flex space-x-2">
-                                                    <button
-                                                        onClick={() => setSelectedFile(null)}
-                                                        className={`p-2 rounded-full ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                                                    >
+                                                    {showAgentButtons && (
+                                                        <>
+                                                            <button onClick={handleUndoChanges} className="px-3 py-1 bg-red-600 text-white rounded">Undo</button>
+                                                            <button onClick={handleKeepChanges} className="px-3 py-1 bg-green-600 text-white rounded">Keep</button>
+                                                        </>
+                                                    )}
+                                                    <button onClick={() => {
+                                                        // Clear decorations when closing file
+                                                        if (editorRef && currentDecorations.length > 0) {
+                                                            editorRef.deltaDecorations(currentDecorations, []);
+                                                            setCurrentDecorations([]);
+                                                        }
+                                                        setSelectedFile(null);
+                                                    }} className={`p-2 rounded-full ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}>
                                                         <X size={24} />
                                                     </button>
                                                 </div>
@@ -2063,9 +2538,42 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                                     const content = value || '';
                                                     setNewFileContent(content);
                                                     setHasChanges(true);
+                                                    
+                                                    // Update session storage for current file
+                                                    if (selectedFile) {
+                                                      const fileName = selectedFile.path.split('/').pop()!;
+                                                      const sessionKey = `file_content_${repoOwnerUsername}_${fileName}`;
+                                                      const originalKey = `original_file_content_${repoOwnerUsername}_${fileName}`;
+                                                      const originalContent = sessionStorage.getItem(originalKey) || '';
+                                                      
+                                                      sessionStorage.setItem(sessionKey, content);
+                                                      
+                                                      // Check if content has changed from original
+                                                      if (content !== originalContent) {
+                                                        // Mark as having manual changes and show buttons
+                                                        sessionStorage.setItem(`manual_changes_${repoOwnerUsername}_${fileName}`, 'true');
+                                                        setShowAgentButtons(true);
+                                                      } else {
+                                                        // Content is back to original, remove manual change marker
+                                                        sessionStorage.removeItem(`manual_changes_${repoOwnerUsername}_${fileName}`);
+                                                        // Only hide buttons if there are no agent changes either
+                                                        const agentOriginal = sessionStorage.getItem(`agent_original_${repoOwnerUsername}_${fileName}`);
+                                                        if (!agentOriginal) {
+                                                          setShowAgentButtons(false);
+                                                        }
+                                                      }
+                                                    }
+                                    
+                                                    // Clear decorations on manual edit
+                                                    if (editorRef && currentDecorations.length > 0) {
+                                                        editorRef.deltaDecorations(currentDecorations, []);
+                                                        setCurrentDecorations([]);
+                                                    }
                                                   }}
-                                                  onMount={(editor, monaco) => {
+                                                  onMount={(editor) => {
                                                     setEditorRef(editor);
+                                                    // Clear any existing decorations when editor mounts
+                                                    setCurrentDecorations([]);
                                                   }}
                                                   options={{
                                                     minimap: { enabled: false },
@@ -2096,8 +2604,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                             </div>
                                             <button
                                                 onClick={() => setTerminalOpen(false)}
-                                                className={`p-1.5 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
-                                                    }`}
+                                                className={`p-1.5 rounded-lg ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
                                             >
                                                 <X size={18} />
                                             </button>
@@ -2129,7 +2636,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                     />
                                     <div className="relative group">
                                         <button
-                                            onClick={handlePushChanges}
+                                            onClick={() => handlePushChanges(commitMessage)}
                                             disabled={!hasChanges}
                                             className={`px-4 py-2 rounded-xl flex items-center space-x-2 ${
                                                 darkMode
@@ -2306,6 +2813,7 @@ const getPreviousVersion = async (fileKey: string): Promise<string | null> => {
                                 width: agentWidth,
                                 cursor: isResizing ? 'col-resize' : 'auto'
                             }}
+                            
                         >
                             {/* Resize handle */}
                             <div

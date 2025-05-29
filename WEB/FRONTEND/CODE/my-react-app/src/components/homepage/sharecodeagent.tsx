@@ -38,7 +38,7 @@ interface ShareCodeAgentProps {
   onClose: () => void;
   repoOwner: string;
   authToken: string;
-  onApplyChanges: (fileName: string, newContent: string) => void;
+  onApplyChanges: (fileName: string, newContent: string, agentEdit: boolean) => void;
   width?: number;
 }
 
@@ -71,7 +71,7 @@ const convertToLineFormat = (content: string) => {
 };
 
 // Add FilePreview component before the ShareCodeAgent component
-const FilePreview = ({ files, onRemove, darkMode, currentFileContents }: { 
+const FilePreview = ({ files, onRemove, darkMode, currentFileContents }: {
   files: Array<{ name: string; content: string }>;
   onRemove: (index: number) => void;
   darkMode: boolean;
@@ -88,7 +88,7 @@ const FilePreview = ({ files, onRemove, darkMode, currentFileContents }: {
         // Use current file contents if available, otherwise use original content
         const currentContent = currentFileContents[file.name] || file.content;
         const lineCount = currentContent.split('\n').length;
-        
+
         return (
           <div
             key={index}
@@ -171,20 +171,6 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
 
     fetchUserData();
   }, [authToken]);
-
-  useEffect(() => {
-    return () => {
-      // Cleanup sessionStorage when component unmounts
-      const keysToRemove = [];
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i);
-        if (key && (key.startsWith('file_content_') || key.startsWith('original_file_content_'))) {
-          keysToRemove.push(key);
-        }
-      }
-      keysToRemove.forEach(key => sessionStorage.removeItem(key));
-    };
-  }, []);
 
   const isBinaryFile = (fileName: string): boolean => {
     const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'tiff', 'ico', 'pdf'];
@@ -444,7 +430,7 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
             const updatedContent = sortedLines.join('\n');
             // Update sessionStorage with new content
             sessionStorage.setItem(sessionKey, updatedContent);
-            onApplyChanges(fileName, updatedContent);
+            onApplyChanges(fileName, updatedContent, true);
             setCurrentFileContents(prev => ({
               ...prev,
               [fileName]: updatedContent
@@ -493,7 +479,7 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
             // Update sessionStorage with new content
             sessionStorage.setItem(sessionKey, updatedContent);
 
-            onApplyChanges(fileName, updatedContent);
+            onApplyChanges(fileName, updatedContent, true);
             setCurrentFileContents(prev => ({
               ...prev,
               [fileName]: updatedContent
@@ -601,7 +587,7 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
       const currentKey = `file_content_${repoOwner}_${fileToRemove.name}`;
       sessionStorage.removeItem(originalKey);
       sessionStorage.removeItem(currentKey);
-      
+
       // Remove from state
       setDroppedFiles(prev => prev.filter((_, i) => i !== index));
       setCurrentFileContents(prev => {
@@ -1001,9 +987,9 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
               } border focus:outline-none focus:ring-1 ${
                 darkMode ? 'focus:ring-violet-500' : 'focus:ring-cyan-500'
               } transition-all duration-200`}
-              style={{ 
-                minHeight: isMobile ? '2.5rem' : '3rem', 
-                maxHeight: isMobile ? '10rem' : '15rem' 
+              style={{
+                minHeight: isMobile ? '2.5rem' : '3rem',
+                maxHeight: isMobile ? '10rem' : '15rem'
               }}
             />
             <button
@@ -1032,8 +1018,8 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
             />
             {droppedFiles.length === 0 && (
               <div className={`text-center py-4 px-3 border-2 border-dashed rounded-lg ${
-                darkMode 
-                  ? 'border-gray-700 text-gray-500' 
+                darkMode
+                  ? 'border-gray-700 text-gray-500'
                   : 'border-gray-300 text-gray-400'
               }`}>
                 <File size={24} className={`mx-auto mb-2 ${
@@ -1048,8 +1034,8 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
               ref={textareaRef}
               value={editPrompt}
               onChange={(e) => setEditPrompt(e.target.value)}
-              placeholder={isMobile ? 
-                "Describe the changes you want..." : 
+              placeholder={isMobile ?
+                "Describe the changes you want..." :
                 "Describe what changes you want to make to the files above..."
               }
               className={`w-full p-2 lg:p-3 rounded-lg resize-none text-xs lg:text-sm ${
@@ -1059,9 +1045,9 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
               } border focus:outline-none focus:ring-1 ${
                 darkMode ? 'focus:ring-violet-500' : 'focus:ring-cyan-500'
               } transition-all duration-200`}
-              style={{ 
-                minHeight: isMobile ? '6rem' : '8rem', 
-                maxHeight: isMobile ? '12rem' : '20rem' 
+              style={{
+                minHeight: isMobile ? '6rem' : '8rem',
+                maxHeight: isMobile ? '12rem' : '20rem'
               }}
             />
             <div className="flex justify-end">
@@ -1082,7 +1068,7 @@ const ShareCodeAgent = ({ darkMode, onClose, repoOwner, authToken, onApplyChange
                   <div className="flex items-center gap-1 lg:gap-2">
                     <div className="flex space-x-1">
                       {[0, 0.15, 0.3].map((delay, i) => (
-                        <span 
+                        <span
                           key={i}
                           className={`w-1 h-1 lg:w-1.5 lg:h-1.5 rounded-full ${
                             darkMode ? 'bg-violet-400' : 'bg-cyan-500'
