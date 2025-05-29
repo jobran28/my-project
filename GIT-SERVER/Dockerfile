@@ -1,31 +1,39 @@
-# Use the official Debian image
+# ───────────────────────────────────────────────────────────────
+#  Git server over HTTP(S) via Apache + git-http-backend
+# ───────────────────────────────────────────────────────────────
 FROM debian:12.9
 
-# Set environment variables for Git over HTTP
-ENV GIT_PROJECT_ROOT=/srv/git
-ENV GIT_HTTP_EXPORT_ALL=1
-ENV REMOTE_USER=git
-ENV GIT_ALLOW_PUSH=1
+# Environment for git-http-backend
+ENV GIT_PROJECT_ROOT=/srv/git \
+    GIT_HTTP_EXPORT_ALL=1 \
+    REMOTE_USER=git \
+    GIT_ALLOW_PUSH=1
 
+# Core packages
+RUN apt-get update \
+ && apt-get install -y apache2 apache2-utils git \
+ && apt-get clean
 
-RUN apt-get update && \
-    apt-get install -y apache2 apache2-utils git && \
-    apt-get clean
+# ── Ensure repo root exists and is owned by www-data (UID 33) ──
+RUN install -d -o 33 -g 33 /srv/git
 
-# Fix Apache environment file (use Bash syntax)
-RUN echo 'export APACHE_PID_FILE=/var/run/apache2/apache2.pid' >> /etc/apache2/envvars && \
-    echo 'export GIT_PROJECT_ROOT=/srv/git' >> /etc/apache2/envvars && \
-    echo 'export GIT_HTTP_EXPORT_ALL=1' >> /etc/apache2/envvars && \
-    echo 'export REMOTE_USER=git' >> /etc/apache2/envvars && \
-    echo 'export GIT_ALLOW_PUSH=1' >> /etc/apache2/envvars
+# ── Silence “dubious ownership” warnings for every repo under /srv/git ──
+RUN git config --system --add safe.directory /srv/git
 
-# Copy Apache configuration
+# Apache picks up our env vars at startup
+RUN echo 'export APACHE_PID_FILE=/var/run/apache2/apache2.pid'            >> /etc/apache2/envvars \
+ && echo 'export GIT_PROJECT_ROOT=/srv/git'                               >> /etc/apache2/envvars \
+ && echo 'export GIT_HTTP_EXPORT_ALL=1'                                   >> /etc/apache2/envvars \
+ && echo 'export REMOTE_USER=git'                                         >> /etc/apache2/envvars \
+ && echo 'export GIT_ALLOW_PUSH=1'                                        >> /etc/apache2/envvars
+
+# Virtual-host configuration for git-http-backend
 COPY git.conf /etc/apache2/sites-available/000-default.conf
 
-# Enable necessary Apache modules
+# Enable required Apache modules
 RUN a2enmod cgi alias env
 
 EXPOSE 80
 
-# Start Apache using "service" command
-CMD ["sh", "-c", "service apache2 start && tail -F /var/log/apache2/access.log /var/log/apache2/error.log"]
+# Lightweight init: start Apache then follow logs
+CMD ["sh","-c","service apache2 start && tail -F /var/log/apache2/access.log /var/log/apache2/error.log"]

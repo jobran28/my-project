@@ -115,7 +115,7 @@ export default function AuthPage({ darkMode, setDarkMode }: AuthPageProps) {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+          //'Authorization': `Bearer ${localStorage.getItem('authToken')}`
         },
         body: JSON.stringify(formData),
       });

@@ -93,10 +93,10 @@ async function main() {
 
   // CORS configuration
   const corsOptions = {
-    origin: 'http://localhost:5173', // Explicit origin
+    origin: '*', // Allow all origins
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'], 
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: '*', // Allow all headers
     exposedHeaders: ['Authorization']
   };
 

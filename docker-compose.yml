@@ -1,5 +1,6 @@
 services:
   database:
+    container_name: database
     build:
       context: ./DATABASE
       dockerfile: dockerfile
@@ -15,6 +16,7 @@ services:
       - app-network
 
   git-server:
+    container_name: git-server
     build:
       context: ./GIT-SERVER
       dockerfile: Dockerfile
@@ -26,6 +28,8 @@ services:
       - app-network
 
   backend:
+    user: "33:33"  # Run as www-data user
+    container_name: backend
     build:
       context: ./WEB/BACKEND
       dockerfile: Dockerfile
@@ -49,6 +53,7 @@ services:
       - app-network
 
   frontend:
+    container_name: frontend
     build:
       context: ./WEB/FRONTEND
       dockerfile: Dockerfile
@@ -66,6 +71,7 @@ services:
       - app-network
 
   otel-collector:
+    container_name: otel-collector
     image: otel/opentelemetry-collector-contrib:latest
     volumes:
       - ./otel-config.yaml:/etc/otelcol-contrib/config.yaml
@@ -80,6 +86,7 @@ services:
       - app-network
 
   jaeger:
+    container_name: jaeger
     image: jaegertracing/all-in-one:latest
     environment:
       - COLLECTOR_OTLP_ENABLED=true   # ✅ turn on ports 4317/4318
@@ -95,6 +102,7 @@ services:
       - app-network
 
   prometheus:
+    container_name: prometheus
     image: prom/prometheus
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
@@ -104,6 +112,7 @@ services:
       - app-network
 
   grafana:
+    container_name: grafana
     image: grafana/grafana
     ports:
       - "3000:3000"
@@ -120,8 +129,8 @@ services:
       - app-network
 
   node-exporter:
-    image: prom/node-exporter
     container_name: node-exporter
+    image: prom/node-exporter
     ports:
       - "9100:9100"
     networks:

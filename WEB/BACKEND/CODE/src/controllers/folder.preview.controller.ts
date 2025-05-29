@@ -134,7 +134,7 @@ export class FolderPreviewController {
         }
         const username = req.user.username;
         const { relativePath, newContent } = req.body;
-        const { ownername } = req.query; // <-- add this
+        const { ownername } = req.query; 
 
         // Basic input validation
         if (!relativePath) {
@@ -142,7 +142,6 @@ export class FolderPreviewController {
              res.status(400).json(apiResponse);
              return;
          }
-        // Note: Allow empty string for newContent, but check for undefined/null
         if (newContent === undefined || newContent === null) {
             const apiResponse: ApiResponse<null> = { status: ResponseStatus.FAILED, message: 'New content is required in the request body', error: 'Missing body parameter: newContent' };
             res.status(400).json(apiResponse);
