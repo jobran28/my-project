@@ -52,6 +52,22 @@ services:
     networks:
       - app-network
 
+  agent-server:
+    container_name: agent-server
+    build:
+      context: ./agent_server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/chat_history
+      - LANGSMITH_TRACING=true
+      - LANGSMITH_PROJECT=my_simple_agent
+    depends_on:
+      - database
+    networks:
+      - app-network
+
   frontend:
     container_name: frontend
     build:
