@@ -35,5 +35,5 @@ RUN a2enmod cgi alias env
 
 EXPOSE 80
 
-# Lightweight init: start Apache then follow logs
-CMD ["sh","-c","service apache2 start && tail -F /var/log/apache2/access.log /var/log/apache2/error.log"]
+# Ensure /var/run/apache2/socks exists before Apache starts, then run Apache in foreground
+CMD ["sh", "-c", "mkdir -p /var/run/apache2/socks && apache2ctl -D FOREGROUND"]
