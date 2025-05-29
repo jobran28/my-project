@@ -11,10 +11,11 @@ RUN mkdir -p /home/www-data && chown 33:33 /home/www-data
 ENV HOME=/home/www-data
 
 WORKDIR /app
+COPY ./CODE .
 
 # Install dependencies with an immutable lock-file workflow
 COPY CODE/package*.json ./
-RUN npm ci
+#RUN npm 
 
 # Copy application source, making it owned by UID 33 inside the image
 COPY --chown=33:33 CODE/ .
@@ -23,4 +24,4 @@ COPY --chown=33:33 CODE/ .
 USER 33:33
 
 EXPOSE 5000
-CMD ["npm","run","dev"]
+CMD ["sh", "-c", "npm install && npm run dev"]
