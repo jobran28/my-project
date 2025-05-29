@@ -351,7 +351,7 @@ export class UserController {
             console.error('Error in UserController.suspendUnsuspendUser:', error);
             res.status(500).json({
                 status: 'failed',
-                message: 'Failed to update user suspension status',
+                message: 'Failed to update user suspejhion status',
                 error: error instanceof Error ? error.message : 'Unknown error'
             });
         }

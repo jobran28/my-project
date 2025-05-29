@@ -163,6 +163,123 @@ const TransferModal: React.FC<TransferModalProps> = ({ show, onClose, repository
   );
 };
 
+interface NotificationModalProps {
+  show: boolean;
+  message: string;
+  type: 'success' | 'error';
+  darkMode: boolean;
+}
+
+const NotificationModal: React.FC<NotificationModalProps> = ({ show, message, type, darkMode }) => {
+  if (!show) return null;
+
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-[9999] pointer-events-none">
+      {/* Backdrop with blur */}
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-fade-in"></div>
+      
+      {/* Modal */}
+      <div className={`relative transform transition-all duration-500 ${show ? 'animate-scale-in' : 'animate-scale-out'}`}>
+        <div className={`
+          bg-gradient-to-br ${type === 'success' 
+            ? darkMode 
+              ? 'from-emerald-900/90 via-emerald-800/90 to-green-900/90' 
+              : 'from-emerald-100/95 via-green-50/95 to-emerald-100/95'
+            : darkMode
+              ? 'from-red-900/90 via-red-800/90 to-pink-900/90'
+              : 'from-red-100/95 via-pink-50/95 to-red-100/95'
+          }
+          border ${type === 'success'
+            ? 'border-emerald-400/30'
+            : 'border-red-400/30'
+          }
+          rounded-2xl shadow-2xl backdrop-blur-md
+          min-w-[400px] max-w-md mx-4
+          overflow-hidden
+        `}>
+          {/* Animated background pattern */}
+          <div className="absolute inset-0 opacity-10">
+            <div className={`absolute inset-0 bg-gradient-to-r ${type === 'success' ? 'from-emerald-400 to-green-400' : 'from-red-400 to-pink-400'} animate-pulse`}></div>
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-white/50 to-transparent animate-shimmer"></div>
+          </div>
+
+          {/* Content */}
+          <div className="relative p-8 text-center">
+            {/* Icon with animation */}
+            <div className={`
+              mx-auto mb-6 w-16 h-16 rounded-full 
+              bg-gradient-to-br ${type === 'success'
+                ? 'from-emerald-400 to-green-500'
+                : 'from-red-400 to-pink-500'
+              }
+              flex items-center justify-center
+              animate-bounce-gentle shadow-lg
+            `}>
+              {type === 'success' ? (
+                <CheckCircle size={32} className="text-white animate-check-mark" />
+              ) : (
+                <AlertCircle size={32} className="text-white" />
+              )}
+            </div>
+
+            {/* Success title */}
+            <h3 className={`
+              text-2xl font-bold mb-3
+              ${type === 'success'
+                ? darkMode ? 'text-emerald-300' : 'text-emerald-700'
+                : darkMode ? 'text-red-300' : 'text-red-700'
+              }
+            `}>
+              {type === 'success' ? 'Success!' : 'Error!'}
+            </h3>
+
+            {/* Message */}
+            <p className={`
+              text-lg leading-relaxed
+              ${darkMode ? 'text-gray-200' : 'text-gray-700'}
+            `}>
+              {message}
+            </p>
+
+            {/* Animated progress bar */}
+            <div className="mt-6 w-full bg-gray-200/30 rounded-full h-1 overflow-hidden">
+              <div className={`
+                h-full bg-gradient-to-r ${type === 'success'
+                  ? 'from-emerald-400 to-green-500'
+                  : 'from-red-400 to-pink-500'
+                }
+                animate-progress-bar
+              `}></div>
+            </div>
+          </div>
+
+          {/* Floating particles effect */}
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+            {[...Array(6)].map((_, i) => (
+              <div
+                key={i}
+                className={`
+                  absolute w-2 h-2 rounded-full
+                  bg-gradient-to-r ${type === 'success'
+                    ? 'from-emerald-400 to-green-400'
+                    : 'from-red-400 to-pink-400'
+                  }
+                  animate-float-${i % 3 + 1}
+                `}
+                style={{
+                  left: `${20 + (i * 15)}%`,
+                  top: `${30 + (i * 10)}%`,
+                  animationDelay: `${i * 0.2}s`
+                }}
+              ></div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 interface AdminInterfaceProps {
   darkMode: boolean;
   setDarkMode: (value: boolean) => void;
@@ -184,6 +301,9 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
   const [actionInProgress, setActionInProgress] = useState<{ id: number; type: string } | null>(null);
   const [actionSuccess, setActionSuccess] = useState<{ message: string; timestamp: number } | null>(null);
   const [actionError, setActionError] = useState<{ message: string; timestamp: number } | null>(null);
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState('');
+  const [notificationType, setNotificationType] = useState<'success' | 'error'>('success');
   const [fullscreen, setFullscreen] = useState(false);
   const [isFrameLoading, setIsFrameLoading] = useState(true);
   const [isResourceFrameLoading, setIsResourceFrameLoading] = useState(true);
@@ -288,6 +408,18 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
     return () => clearInterval(interval);
   }, []);
 
+  // Helper function to show notification modal
+  const showNotification = (message: string, type: 'success' | 'error') => {
+    setNotificationMessage(message);
+    setNotificationType(type);
+    setShowNotificationModal(true);
+    
+    // Auto-hide after 2 seconds
+    setTimeout(() => {
+      setShowNotificationModal(false);
+    }, 2000);
+  };
+
   // User actions
   const handleSuspendUser = async (userId: number, suspend: boolean) => {
     try {
@@ -316,19 +448,13 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
             user.id === userId ? { ...user, suspended: suspend } : user
           )
         );
-        setActionSuccess({
-          message: `User ${suspend ? 'suspended' : 'unsuspended'} successfully`,
-          timestamp: Date.now()
-        });
+        showNotification(`User ${suspend ? 'suspended' : 'unsuspended'} successfully`, 'success');
       } else {
-        setActionError({ message: result.message, timestamp: Date.now() });
+        showNotification(result.message, 'error');
       }
     } catch (error) {
       console.error(`Error ${suspend ? 'suspending' : 'unsuspending'} user:`, error);
-      setActionError({
-        message: `Failed to ${suspend ? 'suspend' : 'unsuspend'} user`,
-        timestamp: Date.now()
-      });
+      showNotification(`Failed to ${suspend ? 'suspend' : 'unsuspend'} user`, 'error');
     } finally {
       setActionInProgress(null);
     }
@@ -358,10 +484,10 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
       if (!response.ok) throw new Error('Failed to delete user');
 
       setUsers(prevUsers => prevUsers.filter(user => user.id !== userId));
-      setActionSuccess({ message: 'User deleted successfully', timestamp: Date.now() });
+      showNotification('User deleted successfully', 'success');
     } catch (error) {
       console.error('Error deleting user:', error);
-      setActionError({ message: 'Failed to delete user', timestamp: Date.now() });
+      showNotification('Failed to delete user', 'error');
     } finally {
       setActionInProgress(null);
     }
@@ -398,19 +524,13 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
             repo.id === repoId ? { ...repo, archived: archive } : repo
           )
         );
-        setActionSuccess({
-          message: `Repository ${archive ? 'archived' : 'restored'} successfully`,
-          timestamp: Date.now()
-        });
+        showNotification(`Repository ${archive ? 'archived' : 'restored'} successfully`, 'success');
       } else {
-        setActionError({ message: result.message, timestamp: Date.now() });
+        showNotification(result.message, 'error');
       }
     } catch (error) {
       console.error(`Error ${archive ? 'archiving' : 'restoring'} repository:`, error);
-      setActionError({
-        message: `Failed to ${archive ? 'archive' : 'restore'} repository`,
-        timestamp: Date.now()
-      });
+      showNotification(`Failed to ${archive ? 'archive' : 'restore'} repository`, 'error');
     } finally {
       setActionInProgress(null);
     }
@@ -440,10 +560,10 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
       if (!response.ok) throw new Error('Failed to delete repository');
 
       setRepositories(prevRepos => prevRepos.filter(repo => repo.id !== repoId));
-      setActionSuccess({ message: 'Repository deleted successfully', timestamp: Date.now() });
+      showNotification('Repository deleted successfully', 'success');
     } catch (error) {
       console.error('Error deleting repository:', error);
-      setActionError({ message: 'Failed to delete repository', timestamp: Date.now() });
+      showNotification('Failed to delete repository', 'error');
     } finally {
       setActionInProgress(null);
     }
@@ -482,10 +602,10 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
         )
       );
 
-      setActionSuccess({ message: 'Repository transferred successfully', timestamp: Date.now() });
+      showNotification('Repository transferred successfully', 'success');
     } catch (error) {
       console.error('Error transferring repository:', error);
-      setActionError({ message: 'Failed to transfer repository ownership', timestamp: Date.now() });
+      showNotification('Failed to transfer repository ownership', 'error');
     } finally {
       setActionInProgress(null);
     }
@@ -1265,23 +1385,98 @@ const AdminInterface = ({ darkMode, setDarkMode }: AdminInterfaceProps) => {
         darkMode={darkMode}
       />
 
-      {/* Action notifications */}
-      <div className="fixed bottom-4 right-4 space-y-2">
-        {actionSuccess && (
-          <div className="flex items-center px-4 py-2 bg-emerald-600/20 text-emerald-400 rounded-lg">
-            <CheckCircle size={16} className="mr-2" />
-            {actionSuccess.message}
-          </div>
-        )}
-        {actionError && (
-          <div className="flex items-center px-4 py-2 bg-red-600/20 text-red-400 rounded-lg">
-            <AlertCircle size={16} className="mr-2" />
-            {actionError.message}
-          </div>
-        )}
-      </div>
+      {/* Notification Modal */}
+      <NotificationModal
+        show={showNotificationModal}
+        message={notificationMessage}
+        type={notificationType}
+        darkMode={darkMode}
+      />
+
+      {/* Remove the old action notifications section */}
     </div>
   );
 };
 
 export default AdminInterface;
+
+// Add these CSS animations to your global CSS or styled-components
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes scale-in {
+    0% {
+      transform: scale(0.8) translateY(20px);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes scale-out {
+    0% {
+      transform: scale(1) translateY(0);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(0.8) translateY(-20px);
+      opacity: 0;
+    }
+  }
+
+  @keyframes fade-in {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  @keyframes bounce-gentle {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+
+  @keyframes check-mark {
+    0% { transform: scale(0); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+  }
+
+  @keyframes progress-bar {
+    0% { width: 0%; }
+    100% { width: 100%; }
+  }
+
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  @keyframes float-1 {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    33% { transform: translateY(-20px) rotate(120deg); }
+    66% { transform: translateY(-10px) rotate(240deg); }
+  }
+
+  @keyframes float-2 {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-15px) rotate(180deg); }
+  }
+
+  @keyframes float-3 {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    25% { transform: translateY(-25px) rotate(90deg); }
+    75% { transform: translateY(-5px) rotate(270deg); }
+  }
+
+  .animate-scale-in { animation: scale-in 0.5s ease-out forwards; }
+  .animate-scale-out { animation: scale-out 0.3s ease-in forwards; }
+  .animate-fade-in { animation: fade-in 0.3s ease-out; }
+  .animate-bounce-gentle { animation: bounce-gentle 2s ease-in-out infinite; }
+  .animate-check-mark { animation: check-mark 0.6s ease-out; }
+  .animate-progress-bar { animation: progress-bar 2s ease-out; }
+  .animate-shimmer { animation: shimmer 2s ease-in-out infinite; }
+  .animate-float-1 { animation: float-1 3s ease-in-out infinite; }
+  .animate-float-2 { animation: float-2 2.5s ease-in-out infinite; }
+  .animate-float-3 { animation: float-3 3.5s ease-in-out infinite; }
+`;
+document.head.appendChild(style);

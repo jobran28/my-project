@@ -544,8 +544,8 @@ export default function ProfileInterface({ darkMode, setDarkMode }: ProfileProps
                                                 <input
                                                     type="text"
                                                     value={editForm.username}
-                                                    onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
-                                                    className={`w-full px-3 py-2 rounded-md ${darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'} border focus:outline-none ${darkMode ? 'focus:border-violet-500' : 'focus:border-cyan-500'}`}
+                                                    disabled // <-- Make username field read-only
+                                                    className={`w-full px-3 py-2 rounded-md ${darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'} border focus:outline-none ${darkMode ? 'focus:border-violet-500' : 'focus:border-cyan-500'} opacity-60 cursor-not-allowed`}
                                                 />
                                             </div>
                                             <div>
