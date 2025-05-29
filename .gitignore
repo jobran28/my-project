@@ -9,7 +9,11 @@ docker-compose*.json
 .devcontainer/
 .vscode/
 VOLUMES/
+
 # Environment variables
+.env
+.env.local
+.env.*.local
 
 /WEB/BACKEND/CODE/node_modules/
 C:\projetpfefinnalsahrecode\pfeproject\agent_server\main.py

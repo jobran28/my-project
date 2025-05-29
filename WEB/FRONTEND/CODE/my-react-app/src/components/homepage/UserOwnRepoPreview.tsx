@@ -145,10 +145,17 @@ const UserOwnRepoPreview = ({ darkMode, setDarkMode }: UserOwnRepoPreviewProps) 
     const handleApplyChanges = async (fileName: string, newContent: string, agentEdit?: boolean) => {
       try {
         const token = localStorage.getItem('authToken');
-        // derive the full relative-path from the selectedFile, preserving any nested folders
-        const relativePath = selectedFile
-          ? selectedFile.path.replace('temp-working-directory/', '')
-          : `${currentPath}/${fileName}`.replace('temp-working-directory/', '');
+        // Always construct the relativePath exactly as in handleFileClick (including subfolders)
+        let relativePath = '';
+        if (selectedFile) {
+          // Use the full path of the selected file, removing temp-working-directory/
+          relativePath = selectedFile.path.replace('temp-working-directory/', '');
+        } else {
+          // If editor is closed, construct the path from currentPath and fileName
+          // currentPath may already be relative (after removing temp-working-directory/)
+          const cleanCurrentPath = currentPath.replace('temp-working-directory/', '');
+          relativePath = `${cleanCurrentPath}/${fileName}`;
+        }
 
         // When it's an agent edit, store original content in sessionStorage
         if (agentEdit) {
@@ -1698,28 +1705,46 @@ const UserOwnRepoPreview = ({ darkMode, setDarkMode }: UserOwnRepoPreviewProps) 
 
             // Before pushing, write all updated file_content_ values to disk/server
             if (repo && repoOwnerUsername) {
-                for (let i = 0; i < sessionStorage.length; i++) {
-                    const key = sessionStorage.key(i);
-                    if (key?.startsWith(`file_content_${repoOwnerUsername}_`)) {
-                        const fileName = key.replace(`file_content_${repoOwnerUsername}_`, '');
-                        const updatedContent = sessionStorage.getItem(key);
-                        if (updatedContent !== null) {
-                          const fullPath = `${currentPath}/${fileName}`.replace('temp-working-directory/', '');
-                            // Always update the file on the server with the latest content before push
-                            await fetch(
-                              `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
-                              {
-                                method: 'PUT',
-                                headers: {
-                                  'Authorization': `Bearer ${token}`,
-                                  'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({ relativePath: fullPath, newContent: updatedContent })
-                              }
-                            );
-                        }
+              for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                if (key?.startsWith(`file_content_${repoOwnerUsername}_`)) {
+                  const fileName = key.replace(`file_content_${repoOwnerUsername}_`, '');
+                  const updatedContent = sessionStorage.getItem(key);
+                  if (updatedContent !== null) {
+                    // Construct the full relative path as in handleFileClick
+                    // Find the file in the directory tree to get its full path
+                    let relativePath = '';
+                    // Try to find the file in the sidebarTree
+                    const findFilePath = (nodes: TreeNode[], name: string): string | null => {
+                      for (const node of nodes) {
+                        if (node.type === 'file' && node.name === name) return node.path;
+                        const found = findFilePath(node.children, name);
+                        if (found) return found;
+                      }
+                      return null;
+                    };
+                    const foundPath = findFilePath(sidebarTree, fileName);
+                    if (foundPath) {
+                      relativePath = foundPath.replace('temp-working-directory/', '');
+                    } else {
+                      // Fallback: use currentPath + fileName
+                      const cleanCurrentPath = currentPath.replace('temp-working-directory/', '');
+                      relativePath = `${cleanCurrentPath}/${fileName}`;
                     }
+                    await fetch(
+                      `http://localhost:5000/v1/api/preview/content?ownername=${encodeURIComponent(repoOwnerUsername)}`,
+                      {
+                        method: 'PUT',
+                        headers: {
+                          'Authorization': `Bearer ${token}`,
+                          'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ relativePath, newContent: updatedContent })
+                      }
+                    );
+                  }
                 }
+              }
             }
 
             // Log the username used for push
@@ -2716,6 +2741,7 @@ useEffect(() => {
                                 width: agentWidth,
                                 cursor: isResizing ? 'col-resize' : 'auto'
                             }}
+                            
                         >
                             {/* Resize handle */}
                             <div
