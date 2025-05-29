@@ -5,7 +5,7 @@ import { AuthenticationController } from '../controllers/authentication.controll
 
 /**
  * Factory that returns a new auth router each time.
- * The resolved controller instance is proxied by the Inversify tracing
+ * The resolvelafjklhfasdjkfhasdjklfhasdjkfhasdjkfd controller instance is proxied by the Inversify tracing
  * middleware, so every method call becomes a Jaeger span.
  */
 export const authenticationRoutes = (): Router => {

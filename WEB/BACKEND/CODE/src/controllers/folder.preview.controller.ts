@@ -305,7 +305,6 @@ export class FolderPreviewController {
             commitMessage || 'Update from web editor'
         );
 
-        // Send response based on service result
         const statusCode = getStatusCode(serviceResponse, 200); // 200 OK for successful push
         res.status(statusCode).json(serviceResponse);
     }

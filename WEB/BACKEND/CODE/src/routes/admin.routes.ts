@@ -4,7 +4,7 @@ import { TYPES } from '../di/types';
 
 import { RepositoryController } from '../controllers/repository.controller';
 import { UserController } from '../controllers/user.controller';
-// import { isAdminMiddleware } from '../middlewares/auth.middleware'; // ← add if you have one
+import { AdminMiddleware } from '../middlewares/admin.middleware';
 
 /**
  * Factory that returns a fresh Admin router.
@@ -17,9 +17,10 @@ export const adminRoutes = (): Router => {
   /* Resolve singleton controllers (proxied for tracing) */
   const repoCtrl  = container.get<RepositoryController>(TYPES.RepositoryController);
   const userCtrl  = container.get<UserController>(TYPES.UserController);
+  const admin     = container.get<AdminMiddleware>(TYPES.AdminMiddleware);
 
-  /* Optional: protect all admin routes */
-  // router.use(isAdminMiddleware);
+  /* Protect all admin routes with admin middleware only */
+  router.use(admin.authorize.bind(admin));
 
   /* ───────── Repository management ───────── */
   router.get(
